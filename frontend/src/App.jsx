@@ -41,8 +41,11 @@ import { useAudioRecorder } from './hooks/useAudioRecorder';
 import { useWebSocketTranscription } from './hooks/useWebSocketTranscription';
 import { useMediaRecorder } from './hooks/useMediaRecorder';
 
+import LyricsView from './components/LyricsView';
+
 const { Header, Content, Footer } = Layout;
 const { Title, Text, Paragraph } = Typography;
+const { Option } = Select;
 const { Dragger } = Upload;
 const { TextArea } = Input;
 
@@ -65,7 +68,18 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [backendStatus, setBackendStatus] = useState({ text: 'Checking...', color: 'default' });
   const [maxTokens, setMaxTokens] = useState(2048);
+  const [recordedBlob, setRecordedBlob] = useState(null);
+  const [recordedUrl, setRecordedUrl] = useState(null);
+  const [currentTime, setCurrentTime] = useState(0); // Add currentTime state
+
+  // Refs
   const mediaRef = useRef(null);
+  const scrollRef = useRef(null);
+
+  // Time update handler for media elements
+  const handleTimeUpdate = (e) => {
+    setCurrentTime(e.target.currentTime);
+  };
 
   // Multi-model states
   const [selectedModel, setSelectedModel] = useState('glm-asr');
@@ -76,10 +90,6 @@ function App() {
 
   // Real-time mode state
   const [mode, setMode] = useState('file'); // 'file', 'realtime', or 'recording'
-
-  // Non-realtime recording state
-  const [recordedBlob, setRecordedBlob] = useState(null);
-  const [recordedUrl, setRecordedUrl] = useState(null);
 
   // Real-time recording hooks - must be initialized before useEffect
   const audioRecorder = useAudioRecorder(); // For real-time WebSocket streaming
@@ -145,30 +155,34 @@ function App() {
 
   // Fetch available models
   useEffect(() => {
+    let mounted = true;
+
     const fetchModels = async () => {
       try {
         const res = await fetch('/models');
         const data = await res.json();
-        setAvailableModels(data.models); // Corrected from setModels to setAvailableModels
+
+        if (!mounted) return false;
+
+        setAvailableModels(data.models);
 
         // Only set selected model if user hasn't chosen one yet
         if (data.default && !selectedModel) {
           setSelectedModel(data.default);
         }
 
-        // If models are not loaded yet, retry in 5 seconds, otherwise stop polling or poll very slowly
-        const anyLoading = data.models.some(m => !m.loaded);
-        if (anyLoading) {
-          setTimeout(fetchModels, 30000);
-        }
+        // Return true if all models are loaded
+        const allLoaded = !data.models.some(m => !m.loaded);
+        return allLoaded;
       } catch (e) {
         console.error('Error fetching models:', e);
+        return false;
       }
     };
 
     fetchModels();
 
-    // Poll for model status updates every 5 seconds (slower)
+    // Poll for model status updates every 10 seconds (slower)
     // Stop polling once all models are loaded
     const pollInterval = setInterval(async () => {
       const allLoaded = await fetchModels();
@@ -176,9 +190,12 @@ function App() {
         console.log('All models loaded, stopping poll');
         clearInterval(pollInterval);
       }
-    }, 5000); // Reduced from 3s to 5s
+    }, 10000);
 
-    return () => clearInterval(pollInterval);
+    return () => {
+      mounted = false;
+      clearInterval(pollInterval);
+    };
   }, []); // Note: selectedModel is NOT in dependencies to avoid resetting
 
   // Theme toggle handler with localStorage
@@ -231,18 +248,26 @@ function App() {
       // Read Server-Sent Events stream
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+      let buffer = '';
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value);
-        const lines = chunk.split('\n');
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk;
+
+        const lines = buffer.split('\n');
+        // Keep the last line in the buffer as it might be incomplete
+        buffer = lines.pop();
 
         for (const line of lines) {
-          if (line.startsWith('data: ')) {
+          if (line.trim().startsWith('data: ')) {
             try {
-              const data = JSON.parse(line.slice(6));
+              const jsonStr = line.trim().slice(6);
+              if (jsonStr === '[DONE]') continue; // Handle potential end stream marker if used
+
+              const data = JSON.parse(jsonStr);
 
               if (data.error) {
                 throw new Error(data.error);
@@ -732,6 +757,7 @@ function App() {
                               ref={mediaRef}
                               src={fileUrl}
                               controls
+                              onTimeUpdate={handleTimeUpdate} // Add listener
                               style={{ width: '100%', borderRadius: 8, maxHeight: 400, background: '#000' }}
                             />
                           ) : (
@@ -739,6 +765,7 @@ function App() {
                               ref={mediaRef}
                               src={fileUrl}
                               controls
+                              onTimeUpdate={handleTimeUpdate} // Add listener
                               style={{ width: '100%' }}
                             />
                           )}
@@ -851,6 +878,7 @@ function App() {
                             <audio
                               controls
                               src={recordedUrl}
+                              onTimeUpdate={handleTimeUpdate} // Add listener
                               style={{ width: '100%', marginTop: 8 }}
                             />
                           </div>
@@ -1045,16 +1073,16 @@ function App() {
                     )
                   }
                 >
-                  {result ? (
+                  {result || (mode === 'realtime' && wsTranscription.transcriptions.length > 0) ? (
                     <Tabs
-                      defaultActiveKey="text"
+                      defaultActiveKey="1"
                       items={[
                         {
-                          key: 'text',
+                          key: '1',
                           label: 'Text',
                           children: (
                             <TextArea
-                              value={result}
+                              value={result || (mode === 'realtime' && wsTranscription.transcriptions.map(t => t.text).join(' ').trim())}
                               readOnly
                               autoSize={{ minRows: 10, maxRows: 30 }}
                               style={{
@@ -1069,13 +1097,13 @@ function App() {
                           )
                         },
                         {
-                          key: 'segments',
+                          key: '2',
                           label: `Segments (${segments.length})`,
                           disabled: segments.length === 0,
                           children: (
                             <Table
-                              dataSource={segments}
-                              rowKey="id"
+                              dataSource={segments.map((s, i) => ({ ...s, key: i }))}
+                              rowKey="key"
                               pagination={{
                                 pageSize: segmentPageSize,
                                 showSizeChanger: true,
@@ -1154,6 +1182,17 @@ function App() {
                                   )
                                 }
                               ]}
+                            />
+                          )
+                        },
+                        {
+                          key: '3',
+                          label: 'Lyrics',
+                          disabled: segments.length === 0,
+                          children: (
+                            <LyricsView
+                              segments={segments}
+                              currentTime={currentTime}
                             />
                           )
                         }
