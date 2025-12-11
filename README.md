@@ -43,20 +43,7 @@ The project includes a `Makefile` mechanism for easy setup (via `start.sh` or ma
     ```
     *This runs `pip install -r backend/requirements.txt` and `npm install` in `frontend`.*
 
-## Configuration (.env)
 
-The project uses environment variables for configuration. You can customize the host and port in `.env` files.
-
--   **Backend (`backend/.env`)**:
-    ```env
-    HOST=0.0.0.0
-    PORT=8000
-    ```
--   **Frontend (`frontend/.env`)**:
-    ```env
-    API_HOST=localhost
-    API_PORT=8000
-    ```
 
 ## Usage
 
