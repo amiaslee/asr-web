@@ -14,12 +14,12 @@ from typing import Optional
 class RealtimeTranscriptionHandler:
     """Handle real-time audio transcription via WebSocket"""
     
-    def __init__(self, model_service, model_name: str = "glm-asr", buffer_duration: float = 3.0):
+    def __init__(self, model_service, model_name: str = "fun-asr", buffer_duration: float = 1.0):
         """
         Args:
             model_service: ASR service instance or manager
-            model_name: Name of the model to use
-            buffer_duration: Seconds of audio to buffer before processing
+            model_name: Name of the model to use (defaulting to fun-asr)
+            buffer_duration: Seconds of audio to buffer before processing (reduced for lower latency)
         """
         self.model_service = model_service
         self.model_name = model_name
@@ -35,7 +35,7 @@ class RealtimeTranscriptionHandler:
             # Send connection confirmation
             await websocket.send_json({
                 "type": "connected",
-                "message": "Ready for audio streaming",
+                "message": "Ready for audio streaming (Fun-ASR)",
                 "buffer_duration": self.buffer_duration
             })
             
@@ -60,10 +60,13 @@ class RealtimeTranscriptionHandler:
             print("Client disconnected")
         except Exception as e:
             print(f"Error in WebSocket handler: {e}")
-            await websocket.send_json({
-                "type": "error",
-                "message": str(e)
-            })
+            try:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": str(e)
+                })
+            except:
+                pass
         finally:
             # Clean up
             self.audio_buffer = []
@@ -85,9 +88,14 @@ class RealtimeTranscriptionHandler:
                 # Process buffered audio
                 await self._transcribe_buffer(websocket)
                 
-                # Keep last 0.5s for context
+                # Fun-ASR and others usually benefit from some context, but for simple chunk-based
+                # we might just clear or keep a small overlap.
+                # Let's keep 0.5s overlap
                 overlap_samples = int(0.5 * self.sample_rate)
-                self.audio_buffer = self.audio_buffer[-overlap_samples:]
+                if len(self.audio_buffer) > overlap_samples:
+                    self.audio_buffer = self.audio_buffer[-overlap_samples:]
+                else:
+                    self.audio_buffer = []
                 
         except Exception as e:
             print(f"Error processing audio chunk: {e}")
@@ -108,25 +116,21 @@ class RealtimeTranscriptionHandler:
             buffer.seek(0)
             
             # Save to temp file for model processing
+            # (FunASR usually reads from file path)
             import tempfile
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_file:
                 tmp_file.write(buffer.read())
                 tmp_path = tmp_file.name
             
             # Transcribe
-            # Transcribe
-            # Only pass timestamp_level if model supports it
-            capabilities = self.model_service.get_capabilities(self.model_name)
             transcribe_kwargs = {"audio_path": tmp_path}
             
-            # If model_service is a manager (has get_model), we might need to pass model_name to transcribe
-            # or better, get the model instance first if possible. 
-            # But assuming model_service.transcribe handles dispatch.
+            # If model_service is a manager, pass model_name
             if hasattr(self.model_service, "get_model"):
                  transcribe_kwargs["model_name"] = self.model_name
 
-            if capabilities.get("supports_timestamps", False):
-                transcribe_kwargs["timestamp_level"] = "none"  # Faster without timestamps for real-time
+            # For real-time, we usually don't need detailed timestamps per chunk, just the text
+            # But FunASR is fast, so it might be fine.
             
             result = await asyncio.to_thread(
                 self.model_service.transcribe,
@@ -135,14 +139,19 @@ class RealtimeTranscriptionHandler:
             
             # Clean up temp file
             import os
-            os.unlink(tmp_path)
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
             
             # Send result
-            await websocket.send_json({
-                "type": "transcription",
-                "text": result.get("text", ""),
-                "timestamp": asyncio.get_event_loop().time()
-            })
+            text = result.get("text", "")
+            if text.strip():
+                await websocket.send_json({
+                    "type": "transcription",
+                    "text": text,
+                    "timestamp": asyncio.get_event_loop().time()
+                })
             
         except Exception as e:
             print(f"Error transcribing buffer: {e}")
