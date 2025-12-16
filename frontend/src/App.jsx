@@ -183,7 +183,7 @@ function App() {
 
     fetchModels();
 
-    // Poll for model status updates every 10 seconds (slower)
+    // Poll for model status updates every 60 seconds (much slower)
     // Stop polling once all models are loaded
     const pollInterval = setInterval(async () => {
       const allLoaded = await fetchModels();
@@ -191,7 +191,7 @@ function App() {
         console.log('All models loaded, stopping poll');
         clearInterval(pollInterval);
       }
-    }, 10000);
+    }, 60000);
 
     return () => {
       mounted = false;
@@ -567,13 +567,6 @@ function App() {
             <Title level={4} style={{ margin: 0 }}>GLM-ASR Studio</Title>
           </div>
           <Space>
-            <Tag icon={
-              backendStatus.color === 'success' ? <CheckCircleOutlined /> :
-                backendStatus.color === 'processing' ? <SyncOutlined spin /> :
-                  <CloseCircleOutlined />
-            } color={backendStatus.color}>
-              {backendStatus.text}
-            </Tag>
             <Switch
               checkedChildren={<MoonOutlined />}
               unCheckedChildren={<SunOutlined />}
@@ -606,7 +599,9 @@ function App() {
                           <Select.Option key={model.name} value={model.name}>
                             <Space>
                               <span>
-                                {model.name === 'glm-asr' ? '🎯 GLM-ASR Nano' : '⚡ Whisper v3 Turbo'}
+                                {model.name === 'glm-asr' ? '🎯 GLM-ASR Nano' :
+                                 model.name === 'fun-asr' ? '🎤 Fun-ASR Nano' :
+                                 model.name === 'whisper-turbo' ? '⚡ Whisper v3 Turbo' : model.name}
                               </span>
                               {!model.loaded && <Tag color="orange">Not loaded</Tag>}
                             </Space>
@@ -1217,6 +1212,7 @@ function App() {
                   originalText={result}
                   segments={segments}
                   isDarkMode={isDarkMode}
+                  currentTime={currentTime}
                 />
               </Col>
             </Row>
