@@ -42,6 +42,7 @@ import { useWebSocketTranscription } from './hooks/useWebSocketTranscription';
 import { useMediaRecorder } from './hooks/useMediaRecorder';
 
 import LyricsView from './components/LyricsView';
+import TranslationView from './components/TranslationView';
 
 const { Header, Content, Footer } = Layout;
 const { Title, Text, Paragraph } = Typography;
@@ -1210,6 +1211,13 @@ function App() {
                     </div>
                   )}
                 </Card>
+
+                {/* AI Translation Block */}
+                <TranslationView
+                  originalText={result}
+                  segments={segments}
+                  isDarkMode={isDarkMode}
+                />
               </Col>
             </Row>
           </div>
