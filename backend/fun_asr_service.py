@@ -33,7 +33,7 @@ class FunASRService(BaseASRService):
                 device=self.device,
                 vad_model="fsmn-vad",
                 punc_model="ct-punc",
-                spk_model="cam++",
+                # spk_model="cam++", # Streaming model does not support timestamp prediction needed for diarization
             )
             print("✓ FunASR model loaded")
 
@@ -60,7 +60,7 @@ class FunASRService(BaseASRService):
         language = kwargs.get("language", "auto")
         generate_kwargs = {
             "input": audio_path,
-            "batch_size_s": 300,
+            "batch_size": 1, # Streaming model requires batch_size=1
             "use_itn": True,
         }
 
