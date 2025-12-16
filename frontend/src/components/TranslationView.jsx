@@ -1,15 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Button, Modal, Select, Input, Form, message, Space, Typography, Dropdown, Menu } from 'antd';
-import { TranslationOutlined, SettingOutlined, DownloadOutlined, CopyOutlined } from '@ant-design/icons';
+import { Card, Button, Modal, Select, Input, Form, message, Space, Typography, Dropdown, Menu, Tabs, Table } from 'antd';
+import { TranslationOutlined, SettingOutlined, DownloadOutlined, CopyOutlined, PlayCircleOutlined } from '@ant-design/icons';
+import LyricsView from './LyricsView';
 
 const { Title, Text, Paragraph } = Typography;
 const { Option } = Select;
 const { TextArea } = Input;
 
-const TranslationView = ({ originalText, segments, isDarkMode }) => {
+const TranslationView = ({ originalText, segments, isDarkMode, currentTime = 0 }) => {
   const [isSettingsVisible, setIsSettingsVisible] = useState(false);
   const [translatedText, setTranslatedText] = useState('');
+  const [translatedSegments, setTranslatedSegments] = useState([]);
   const [isTranslating, setIsTranslating] = useState(false);
+  const [targetLanguage, setTargetLanguage] = useState('English');
+  const [customLanguage, setCustomLanguage] = useState('');
+  const [segmentPageSize, setSegmentPageSize] = useState(10);
+
   const [settings, setSettings] = useState({
     provider: 'zhipu', // 'zhipu' or 'deepseek'
     zhipuKey: '',
@@ -37,13 +43,13 @@ const TranslationView = ({ originalText, segments, isDarkMode }) => {
   const getProviderConfig = () => {
     if (settings.provider === 'zhipu') {
       return {
-        url: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+        url: settings.apiUrl || 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
         apiKey: settings.zhipuKey,
         defaultModel: 'glm-4'
       };
     } else {
       return {
-        url: settings.apiUrl || 'https://api.deepseek.com/v1/chat/completions', // Example URL
+        url: settings.apiUrl || 'https://api.deepseek.com/v1/chat/completions',
         apiKey: settings.deepseekKey,
         defaultModel: 'deepseek-chat'
       };
@@ -51,7 +57,7 @@ const TranslationView = ({ originalText, segments, isDarkMode }) => {
   };
 
   const handleTranslate = async () => {
-    if (!originalText) {
+    if (!originalText && (!segments || segments.length === 0)) {
       message.warning('No text to translate');
       return;
     }
@@ -64,18 +70,34 @@ const TranslationView = ({ originalText, segments, isDarkMode }) => {
     }
 
     setIsTranslating(true);
-    try {
-      // Construct the prompt
-      // We want to translate the content while keeping structure if possible, or just text
-      // The user suggested "translate original format... ensuring model returns correct format... JSON best"
+    setTranslatedSegments([]);
+    setTranslatedText('');
 
-      const contentToTranslate = segments && segments.length > 0
+    try {
+      const targetLang = customLanguage || targetLanguage;
+
+      // Determine content to translate
+      // We prioritize segments for better structure
+      const hasSegments = segments && segments.length > 0;
+
+      // If we have segments, we want to translate them while preserving timestamps
+      // To save tokens/complexity, we might need to batch them, but for this MVP let's try sending them all
+      // or a simplified version.
+      // NOTE: Sending too many segments might hit context limits.
+      // For now, we assume reasonable length or that the model can handle it.
+
+      const contentToTranslate = hasSegments
         ? JSON.stringify(segments.map(s => ({ start: s.start, end: s.end, text: s.text })))
         : originalText;
 
-      const systemPrompt = segments && segments.length > 0
-        ? `You are a professional translator. Translate the following JSON segments into English (or the target language if specified). Keep the JSON structure exactly the same (keys: start, end, text), only translate the 'text' value. Output VALID JSON only.`
-        : `You are a professional translator. Translate the following text into English.`;
+      const systemPrompt = hasSegments
+        ? `You are a professional translator. Translate the text content of the following JSON segments into ${targetLang}.
+           IMPORTANT:
+           1. Return EXACTLY the same JSON structure: a list of objects with keys "start", "end", "text".
+           2. Do NOT change the "start" or "end" values.
+           3. Only translate the "text" value.
+           4. Output ONLY the valid JSON, no markdown, no explanations.`
+        : `You are a professional translator. Translate the following text into ${targetLang}. Return only the translated text.`;
 
       const response = await fetch(config.url, {
         method: 'POST',
@@ -89,7 +111,7 @@ const TranslationView = ({ originalText, segments, isDarkMode }) => {
             { role: 'system', content: systemPrompt },
             { role: 'user', content: contentToTranslate }
           ],
-          stream: false // Simplify for now, maybe stream later
+          stream: false
         })
       });
 
@@ -101,16 +123,34 @@ const TranslationView = ({ originalText, segments, isDarkMode }) => {
 
       const result = data.choices?.[0]?.message?.content || '';
 
-      // If it was JSON, try to parse it to pretty print or verify
-      if (segments && segments.length > 0) {
+      if (hasSegments) {
         try {
            // Clean up markdown code blocks if present
            const cleanResult = result.replace(/```json/g, '').replace(/```/g, '').trim();
-           const parsed = JSON.parse(cleanResult);
-           setTranslatedText(JSON.stringify(parsed, null, 2));
+           // Find the first [ and last ]
+           const firstBracket = cleanResult.indexOf('[');
+           const lastBracket = cleanResult.lastIndexOf(']');
+
+           if (firstBracket !== -1 && lastBracket !== -1) {
+             const jsonStr = cleanResult.substring(firstBracket, lastBracket + 1);
+             const parsedSegments = JSON.parse(jsonStr);
+
+             // Validate structure
+             if (Array.isArray(parsedSegments)) {
+               setTranslatedSegments(parsedSegments);
+               // Also set full text
+               setTranslatedText(parsedSegments.map(s => s.text).join(' '));
+             } else {
+               throw new Error("Response is not an array");
+             }
+           } else {
+             throw new Error("No JSON array found in response");
+           }
         } catch (e) {
            console.warn("Failed to parse JSON response", e);
+           message.warning("Translation received but format was not perfect JSON. Showing as text.");
            setTranslatedText(result);
+           setTranslatedSegments([]);
         }
       } else {
         setTranslatedText(result);
@@ -124,18 +164,123 @@ const TranslationView = ({ originalText, segments, isDarkMode }) => {
     }
   };
 
-  const handleExport = () => {
-      if (!translatedText) return;
-      const blob = new Blob([translatedText], { type: 'text/plain' });
+  const handleExport = (format) => {
+      let content = '';
+      let filename = 'translation';
+      let mimeType = 'text/plain';
+
+      if (format === 'json') {
+          content = JSON.stringify({
+              text: translatedText,
+              segments: translatedSegments,
+              language: customLanguage || targetLanguage
+          }, null, 2);
+          filename += '.json';
+          mimeType = 'application/json';
+      } else if (format === 'txt') {
+          content = translatedText;
+          filename += '.txt';
+      } else if (format === 'srt' && translatedSegments.length > 0) {
+          content = translatedSegments.map((seg, idx) => {
+              const start = formatSRTTime(seg.start);
+              const end = formatSRTTime(seg.end);
+              return `${idx + 1}\n${start} --> ${end}\n${seg.text}\n`;
+          }).join('\n');
+          filename += '.srt';
+      }
+
+      if (!content) return;
+
+      const blob = new Blob([content], { type: mimeType });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'translation.json'; // Default to json as requested
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
   };
+
+  const formatSRTTime = (seconds) => {
+    const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
+    const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
+    const s = Math.floor(seconds % 60).toString().padStart(2, '0');
+    const ms = Math.floor((seconds % 1) * 1000).toString().padStart(3, '0');
+    return `${h}:${m}:${s},${ms}`;
+  };
+
+  // Header Extra Content
+  const renderHeaderExtra = () => (
+    <Space>
+      <Space.Compact>
+        <Select
+            value={targetLanguage}
+            onChange={setTargetLanguage}
+            style={{ width: 120 }}
+            options={[
+                { value: 'English', label: 'English' },
+                { value: 'Chinese', label: 'Chinese' },
+                { value: 'Japanese', label: 'Japanese' },
+                { value: 'Korean', label: 'Korean' },
+                { value: 'Spanish', label: 'Spanish' },
+                { value: 'French', label: 'French' },
+                { value: 'German', label: 'German' },
+                { value: 'Custom', label: 'Custom' },
+            ]}
+        />
+        {targetLanguage === 'Custom' && (
+            <Input
+                placeholder="Target Lang"
+                value={customLanguage}
+                onChange={e => setCustomLanguage(e.target.value)}
+                style={{ width: 100 }}
+            />
+        )}
+      </Space.Compact>
+
+      <Button
+        type="primary"
+        onClick={handleTranslate}
+        loading={isTranslating}
+        icon={<PlayCircleOutlined />}
+      >
+        Start Translation
+      </Button>
+
+      <Button
+        icon={<SettingOutlined />}
+        onClick={() => setIsSettingsVisible(true)}
+      >
+        Settings
+      </Button>
+
+      {translatedText && (
+        <>
+            <Button
+                icon={<CopyOutlined />}
+                onClick={() => {
+                    navigator.clipboard.writeText(translatedText);
+                    message.success('Copied');
+                }}
+            >
+                Copy
+            </Button>
+            <Dropdown
+              menu={{
+                items: [
+                  { key: 'txt', label: 'Export TXT', onClick: () => handleExport('txt') },
+                  { key: 'json', label: 'Export JSON', onClick: () => handleExport('json') },
+                  { key: 'srt', label: 'Export SRT', disabled: !translatedSegments.length, onClick: () => handleExport('srt') },
+                ]
+              }}
+            >
+                <Button icon={<DownloadOutlined />}>Export</Button>
+            </Dropdown>
+        </>
+      )}
+    </Space>
+  );
 
   return (
     <Card
@@ -145,72 +290,105 @@ const TranslationView = ({ originalText, segments, isDarkMode }) => {
           <span>AI Translation</span>
         </Space>
       }
-      extra={
-        <Space>
-          <Button
-            icon={<SettingOutlined />}
-            onClick={() => setIsSettingsVisible(true)}
-          >
-            Settings
-          </Button>
-          {translatedText && (
-            <>
-                <Button
-                    icon={<CopyOutlined />}
-                    onClick={() => {
-                        navigator.clipboard.writeText(translatedText);
-                        message.success('Copied');
-                    }}
-                />
-                <Button
-                    icon={<DownloadOutlined />}
-                    onClick={handleExport}
-                >
-                    Export
-                </Button>
-            </>
-          )}
-        </Space>
-      }
+      extra={renderHeaderExtra()}
       style={{
         marginTop: 24,
         boxShadow: '0 4px 12px rgba(0,0,0,0.05)'
       }}
     >
-      <div style={{ marginBottom: 16, textAlign: 'center' }}>
-        <Button
-            type="primary"
-            size="large"
-            onClick={handleTranslate}
-            loading={isTranslating}
-            style={{ minWidth: 200 }}
-        >
-            {isTranslating ? 'Translating...' : 'Start Translation'}
-        </Button>
-      </div>
-
-      {translatedText ? (
-        <TextArea
-          value={translatedText}
-          readOnly
-          autoSize={{ minRows: 6, maxRows: 20 }}
-          style={{
-            fontFamily: 'monospace',
-            background: isDarkMode ? '#1f1f1f' : '#f5f5f5',
-            color: isDarkMode ? '#ddd' : '#333'
-          }}
-        />
-      ) : (
+      {!translatedText && !isTranslating ? (
         <div style={{
             textAlign: 'center',
-            padding: '40px',
+            padding: '60px 20px',
             color: isDarkMode ? '#666' : '#999',
             border: `1px dashed ${isDarkMode ? '#444' : '#d9d9d9'}`,
             borderRadius: 8
         }}>
-            <TranslationOutlined style={{ fontSize: 32, marginBottom: 8 }} />
-            <p>Configure settings and click Start to translate recognition results</p>
+            <TranslationOutlined style={{ fontSize: 32, marginBottom: 16 }} />
+            <Paragraph>
+                Select a target language and click "Start Translation" to translate the results using AI.
+            </Paragraph>
         </div>
+      ) : (
+        <Tabs
+            defaultActiveKey="1"
+            items={[
+            {
+                key: '1',
+                label: 'Text',
+                children: (
+                <TextArea
+                    value={translatedText}
+                    readOnly
+                    autoSize={{ minRows: 10, maxRows: 30 }}
+                    style={{
+                    fontSize: 16,
+                    lineHeight: 1.8,
+                    background: 'transparent',
+                    border: 'none',
+                    resize: 'none',
+                    color: isDarkMode ? '#ddd' : '#333'
+                    }}
+                />
+                )
+            },
+            {
+                key: '2',
+                label: `Segments (${translatedSegments.length})`,
+                disabled: translatedSegments.length === 0,
+                children: (
+                <Table
+                    dataSource={translatedSegments.map((s, i) => ({ ...s, key: i }))}
+                    rowKey="key"
+                    pagination={{
+                        pageSize: segmentPageSize,
+                        showSizeChanger: true,
+                        pageSizeOptions: ['5', '10', '20', '50', '100'],
+                        onChange: (page, pageSize) => setSegmentPageSize(pageSize)
+                    }}
+                    size="small"
+                    columns={[
+                    {
+                        title: 'Start',
+                        dataIndex: 'start',
+                        key: 'start',
+                        width: 80,
+                        render: (time) => time ? `${time.toFixed(1)}s` : '-'
+                    },
+                    {
+                        title: 'End',
+                        dataIndex: 'end',
+                        key: 'end',
+                        width: 80,
+                        render: (time) => time ? `${time.toFixed(1)}s` : '-'
+                    },
+                    {
+                        title: 'Text',
+                        dataIndex: 'text',
+                        key: 'text',
+                        render: (text) => (
+                        <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                            {text}
+                        </div>
+                        )
+                    }
+                    ]}
+                />
+                )
+            },
+            {
+                key: '3',
+                label: 'Lyrics',
+                disabled: translatedSegments.length === 0,
+                children: (
+                <LyricsView
+                    segments={translatedSegments}
+                    currentTime={currentTime}
+                />
+                )
+            }
+            ]}
+        />
       )}
 
       <Modal
@@ -235,30 +413,24 @@ const TranslationView = ({ originalText, segments, isDarkMode }) => {
             noStyle
             shouldUpdate={(prev, current) => prev.provider !== current.provider}
           >
-            {({ getFieldValue }) =>
-                getFieldValue('provider') === 'zhipu' ? (
-                    <Form.Item
-                        label="API Key"
-                        name="zhipuKey"
-                        rules={[{ required: true, message: 'Please enter API Key' }]}
-                    >
-                        <Input.Password placeholder="Enter Zhipu API Key" />
-                    </Form.Item>
-                ) : (
+            {({ getFieldValue }) => {
+                const isZhipu = getFieldValue('provider') === 'zhipu';
+                return (
                     <>
                         <Form.Item
                             label="API Key"
-                            name="deepseekKey"
+                            name={isZhipu ? "zhipuKey" : "deepseekKey"}
                             rules={[{ required: true, message: 'Please enter API Key' }]}
                         >
-                            <Input.Password placeholder="Enter DeepSeek API Key" />
+                            <Input.Password placeholder={`Enter ${isZhipu ? 'Zhipu' : 'DeepSeek'} API Key`} />
                         </Form.Item>
-                        <Form.Item label="API Endpoint" name="apiUrl">
-                            <Input placeholder="https://api.deepseek.com/v1/chat/completions" />
+
+                        <Form.Item label="API Endpoint" name="apiUrl" help="Optional. Overrides default endpoint.">
+                            <Input placeholder={isZhipu ? "https://open.bigmodel.cn/api/paas/v4/chat/completions" : "https://api.deepseek.com/v1/chat/completions"} />
                         </Form.Item>
                     </>
-                )
-            }
+                );
+            }}
           </Form.Item>
 
           <Form.Item label="Model Name" name="model" tooltip="Leave empty for default">

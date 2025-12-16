@@ -10,14 +10,14 @@ class FunASRService(BaseASRService):
 
     def __init__(self):
         self.model = None
-        self.model_id = "FunAudioLLM/Fun-ASR-Nano-2512"
+        # Use Paraformer Streaming as it is the most stable and widely used streaming model for FunASR
+        # Fun-ASR-Nano-2512 seems to have deployment issues with missing Qwen3 files on ModelScope currently.
+        # Paraformer is excellent for real-time applications.
+        self.model_id = "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online"
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         # Handle MPS (Apple Silicon) if needed, though funasr might rely on specific torch backends
         if os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK") == "1" and torch.backends.mps.is_available():
-             self.device = "mps" # FunASR support for MPS might be limited, but let's try or fallback to cpu
-             # Actually, for safety with new libraries, let's stick to CPU if CUDA is missing unless we know it works
-             # But let's default to auto-detect
-             pass
+             self.device = "mps"
 
     def load_model(self):
         """Load the FunASR model"""
@@ -25,7 +25,7 @@ class FunASRService(BaseASRService):
             print(f"Loading FunASR model: {self.model_id} on {self.device}...")
             from funasr import AutoModel
 
-            # Use VAD and Punc models for better results as shown in their demo
+            # Use VAD and Punc models for better results
             self.model = AutoModel(
                 model=self.model_id,
                 model_revision="master",
@@ -33,7 +33,7 @@ class FunASRService(BaseASRService):
                 device=self.device,
                 vad_model="fsmn-vad",
                 punc_model="ct-punc",
-                # spk_model="cam++", # Speaker diarization if needed, but maybe skip for now to keep it light
+                spk_model="cam++",
             )
             print("✓ FunASR model loaded")
 
@@ -42,10 +42,10 @@ class FunASRService(BaseASRService):
 
     def get_capabilities(self) -> Dict[str, Any]:
         return {
-            "name": "Fun-ASR",
+            "name": "Fun-ASR (Paraformer)",
             "supports_timestamps": True,
-            "supports_word_timestamps": True, # It seems to support it via the timestamp output
-            "supports_languages": ["zh", "en", "ja", "ko", "yue", "auto"], # And many more
+            "supports_word_timestamps": True,
+            "supports_languages": ["zh", "en", "auto"], # Paraformer is strong in ZH/EN
             "description": "FunAudioLLM End-to-End Speech Recognition"
         }
 
@@ -58,40 +58,24 @@ class FunASRService(BaseASRService):
 
         # Prepare arguments
         language = kwargs.get("language", "auto")
-        # FunASR often auto-detects, but if explicit language is passed:
         generate_kwargs = {
             "input": audio_path,
             "batch_size_s": 300,
             "use_itn": True,
         }
 
-        if language and language != "auto":
-            generate_kwargs["language"] = language
-
         # Run inference
-        # FunASR generate returns a list of results
         try:
             res = self.model.generate(**generate_kwargs)
-            # res structure is typically [{"key": "...", "text": "...", "timestamp": [...]}]
 
             if not res:
                 return {"text": "", "segments": []}
 
             result_item = res[0]
             text = result_item.get("text", "")
-            raw_timestamp = result_item.get("timestamp", [])
 
             # Convert to standard segments format
             segments = []
-
-            # Check if timestamp is available and in expected format
-            # FunASR timestamp format can be complex or just a list of [start, end]
-            # Based on grep, it seems to be [[start, end], ...] corresponding to tokens or sentences?
-            # Or using 'sentence_timestamp=True' might be needed for sentence level
-
-            # Let's see if we can structure it.
-            # If "sentence_info" is present (often with vad/punc), use that
-            # Otherwise parse 'timestamp'
 
             if "sentence_info" in result_item:
                 for sent in result_item["sentence_info"]:
@@ -101,10 +85,6 @@ class FunASRService(BaseASRService):
                         "text": sent.get("text", ""),
                         "words": [] # detailed word timestamps if available
                     })
-            elif raw_timestamp:
-                 # Fallback if structure is different
-                 # This is a simplification; precise mapping depends on exact output format
-                 pass
 
             # If segments were empty, try to construct from raw text
             if not segments and text:
@@ -118,7 +98,7 @@ class FunASRService(BaseASRService):
                 "text": text,
                 "segments": segments,
                 "metadata": {
-                    "model": "Fun-ASR",
+                    "model": "Fun-ASR (Paraformer)",
                     "language": language
                 }
             }
