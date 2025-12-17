@@ -29,7 +29,7 @@ class MLXWhisperService(BaseASRService):
         """Check if model is ready"""
         return self.model_loaded
     
-    def transcribe(self, audio_path: str, language: str = None, word_timestamps: bool = False, progress_callback=None) -> Dict[str, Any]:
+    def transcribe(self, audio_path: str, language: str = None, word_timestamps: bool = False, progress_callback=None, **kwargs) -> Dict[str, Any]:
         """Transcribe audio file using MLX Whisper with progress tracking
         
         Args:
@@ -37,6 +37,7 @@ class MLXWhisperService(BaseASRService):
             language: Language code or None for auto-detection
             word_timestamps: Whether to include word-level timestamps
             progress_callback: Optional callable(progress: int, status: str)
+            **kwargs: Additional arguments (e.g. timestamp_level)
         """
         if not self.is_loaded():
             raise RuntimeError("MLX Whisper not initialized")
@@ -50,27 +51,15 @@ class MLXWhisperService(BaseASRService):
             progress_callback(15, "Loading audio")
         
         try:
-            # Detect language if not specified
-            if not language:
-                if progress_callback:
-                    progress_callback(25, "Detecting language")
-                
-                # Quick detection pass
-                detected = mlx_whisper.transcribe(
-                    audio_path,
-                    path_or_hf_repo="mlx-community/whisper-large-v3-turbo",
-                    language=None,
-                    word_timestamps=False,
-                    verbose=False
-                )
-                language = detected.get("language", "en")
-                print(f"Detected language: {language}")
-                
-                if progress_callback:
-                    progress_callback(35, f"Language detected: {language}")
-            else:
-                if progress_callback:
-                    progress_callback(35, f"Transcribing in {language}")
+            # If language is None, we let the main transcription call handle detection (auto).
+            # This avoids running the model twice (once for detection, once for transcription),
+            # which improves performance and avoids potential inconsistencies.
+
+            if progress_callback:
+                if not language:
+                    progress_callback(25, "Transcribing (auto-detecting language)")
+                else:
+                    progress_callback(25, f"Transcribing in {language}")
             
             # Full transcription with progress
             if progress_callback:
@@ -79,7 +68,7 @@ class MLXWhisperService(BaseASRService):
             result = mlx_whisper.transcribe(
                 audio_path,
                 path_or_hf_repo="mlx-community/whisper-large-v3-turbo",
-                language=language,
+                language=language, # If None, it detects
                 word_timestamps=word_timestamps,
                 verbose=True
             )

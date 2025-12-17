@@ -49,9 +49,65 @@ class FunASRService(BaseASRService):
             "description": "FunAudioLLM End-to-End Speech Recognition"
         }
 
+    def stream_step(self, audio_chunk: Any, cache: Dict[str, Any] = None, is_final: bool = False) -> Dict[str, Any]:
+        """
+        Streaming step for FunASR
+        """
+        if not self.model:
+            self.load_model()
+
+        # Input audio chunk should be a numpy array or bytes
+        # FunASR streaming expects input as numpy array
+
+        try:
+            # We assume audio_chunk is already correct format (numpy array usually)
+            # The model is iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online
+
+            # The streaming API:
+            # res = model.generate(input=chunk, cache=cache, is_final=is_final, chunk_size=chunk_size, ...)
+
+            # Default chunk size for paraformer online
+            # According to docs: [0, 10, 5] means 600ms latency configuration?
+            # Or simplified: just pass the chunk.
+
+            # Note: For online models, cache is updated in-place or returned?
+            # In FunASR `AutoModel.generate`, if input is not file, it returns result.
+            # And it updates cache if passed?
+            # Looking at docs: res = model.generate(..., cache=cache, ...)
+
+            res = self.model.generate(
+                input=audio_chunk,
+                cache=cache if cache is not None else {},
+                is_final=is_final,
+                # chunk_size=[0, 10, 5], # Let's use default or omit if possible
+                # encoder_chunk_look_back=4,
+                # decoder_chunk_look_back=1
+            )
+
+            # res structure:
+            # It usually returns a list of results.
+            # For streaming, it returns results for the current chunk.
+
+            text = ""
+            if res:
+                # Depending on the model output format.
+                # Usually: [{'text': '...', 'timestamp': ...}]
+                result_item = res[0]
+                text = result_item.get("text", "")
+
+            return {
+                "text": text,
+                # "segments": ... # Timestamp info might be partial
+            }
+
+        except Exception as e:
+            print(f"FunASR streaming error: {e}")
+            # If error, return empty
+            return {"text": ""}
+
     def transcribe(self, audio_path: str, **kwargs) -> Dict[str, Any]:
         """
-        Transcribe audio using FunASR
+        Transcribe audio using FunASR (File-based)
         """
         if not self.model:
             self.load_model()
