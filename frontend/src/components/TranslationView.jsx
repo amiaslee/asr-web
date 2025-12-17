@@ -187,6 +187,21 @@ const TranslationView = ({ originalText, segments, isDarkMode, currentTime = 0 }
               return `${idx + 1}\n${start} --> ${end}\n${seg.text}\n`;
           }).join('\n');
           filename += '.srt';
+      } else if (format === 'vtt' && translatedSegments.length > 0) {
+          const vttContent = translatedSegments.map((seg) => {
+              const start = formatVTTTime(seg.start);
+              const end = formatVTTTime(seg.end);
+              return `${start} --> ${end}\n${seg.text}`;
+          }).join('\n\n');
+          content = `WEBVTT\n\n${vttContent}`;
+          filename += '.vtt';
+          mimeType = 'text/vtt';
+      } else if (format === 'lrc' && translatedSegments.length > 0) {
+          content = translatedSegments.map((seg) => {
+              const time = formatLRCTime(seg.start);
+              return `[${time}]${seg.text}`;
+          }).join('\n');
+          filename += '.lrc';
       }
 
       if (!content) return;
@@ -208,6 +223,21 @@ const TranslationView = ({ originalText, segments, isDarkMode, currentTime = 0 }
     const s = Math.floor(seconds % 60).toString().padStart(2, '0');
     const ms = Math.floor((seconds % 1) * 1000).toString().padStart(3, '0');
     return `${h}:${m}:${s},${ms}`;
+  };
+
+  const formatVTTTime = (seconds) => {
+    const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
+    const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
+    const s = Math.floor(seconds % 60).toString().padStart(2, '0');
+    const ms = Math.floor((seconds % 1) * 1000).toString().padStart(3, '0');
+    return `${h}:${m}:${s}.${ms}`;
+  };
+
+  const formatLRCTime = (seconds) => {
+    const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+    const s = Math.floor(seconds % 60).toString().padStart(2, '0');
+    const ms = Math.floor((seconds % 1) * 1000).toString().padStart(3, '0');
+    return `${m}:${s}.${ms}`;
   };
 
   // Header Extra Content
@@ -272,6 +302,8 @@ const TranslationView = ({ originalText, segments, isDarkMode, currentTime = 0 }
                   { key: 'txt', label: 'Export TXT', onClick: () => handleExport('txt') },
                   { key: 'json', label: 'Export JSON', onClick: () => handleExport('json') },
                   { key: 'srt', label: 'Export SRT', disabled: !translatedSegments.length, onClick: () => handleExport('srt') },
+                  { key: 'vtt', label: 'Export VTT', disabled: !translatedSegments.length, onClick: () => handleExport('vtt') },
+                  { key: 'lrc', label: 'Export LRC', disabled: !translatedSegments.length, onClick: () => handleExport('lrc') },
                 ]
               }}
             >
